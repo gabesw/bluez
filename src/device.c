@@ -120,6 +120,14 @@ struct authentication_req {
 	gboolean secure;
 };
 
+typedef enum {
+    POLICY_ASSOC_ANY,
+    POLICY_ASSOC_NO_JUST_WORKS,    /* reject JUST_WORKS and JUST_CFM */
+    POLICY_ASSOC_NUMERIC_COMPARE,  /* require REQ_PASSKEY, CFM_PASSKEY, or DSP_PASSKEY */
+    POLICY_ASSOC_PASSKEY_ENTRY,
+    POLICY_ASSOC_OOB,
+} pairing_policy_t;
+
 enum {
 	BROWSE_SDP,
 	BROWSE_GATT
@@ -3591,6 +3599,9 @@ static const GDBusMethodTable device_methods[] = {
 	{ GDBUS_EXPERIMENTAL_METHOD("GetServiceRecords", NULL,
 				    GDBUS_ARGS({ "Records", "aay" }),
 				    get_service_records) },
+	{ GDBUS_EXPERIMENTAL_METHOD("SetPairingPolicy",
+					GDBUS_ARGS({ "Policy", "s" }),
+				    NULL, dev_set_pairing_policy) },
 	{ }
 };
 
@@ -7578,6 +7589,191 @@ static void display_pincode_cb(struct agent *agent, DBusError *err, void *data)
 	device->authr->pincode = NULL;
 }
 
+static const char *policy2str(pairing_policy_t policy)
+{
+	switch (policy) {
+		case POLICY_ASSOC_ANY:
+			return "POLICY_ASSOC_ANY";
+		case POLICY_ASSOC_NO_JUST_WORKS:
+			return "POLICY_ASSOC_NO_JUST_WORKS";
+		case POLICY_ASSOC_PASSKEY_ENTRY:
+			return "POLICY_ASSOC_PASSKEY_ENTRY";
+		case POLICY_ASSOC_OOB:
+			return "POLICY_ASSOC_OOB";
+		default:
+			return "POLICY_ASSOC_ANY";
+    }
+}
+
+static int get_policy_dir(struct btd_device *device,
+							char *dir_out, size_t dir_out_len)
+{
+	char addr[18];
+	const char *type_str;
+
+	ba2str(&device->bdaddr, addr);
+
+	switch (device->bdaddr_type) {
+		case BDADDR_BREDR:
+			type_str = "bredr";
+			break;
+		case BDADDR_LE_PUBLIC:
+			type_str = "le_public";
+			break;
+		case BDADDR_LE_RANDOM:
+			type_str = "le_random";
+			break;
+		default:
+			type_str = "unknown";
+			break;
+	}
+
+	snprintf(dir_out, dir_out_len,
+				PAIRING_POLICY_BASEDIR "/%s_%s",
+				addr, type_str);
+
+	return 0;
+}
+
+static int get_policy_path(struct btd_device *device,
+							char *path_out, size_t path_out_len)
+{
+    char dir[PATH_MAX];
+
+    get_policy_dir(device, dir, sizeof(dir));
+    snprintf(path_out, path_out_len, "%s" PAIRING_POLICY_FILENAME, dir);
+
+    return 0;
+}
+
+static int write_pairing_policy(struct btd_device *device, pairing_policy_t policy)
+{
+	char pp_path[PATH_MAX];
+	FILE *fp_pp;
+
+	get_policy_dir(device, pp_path, sizeof(pp_path));
+
+	if (mkdir(PAIRING_POLICY_BASEDIR, 0700) < 0 && errno != EEXIST)
+		return -EPERM;
+
+	if (mkdir(pp_path, 0700) < 0 && errno != EEXIST)
+		return -EPERM;
+
+	get_policy_path(device, pp_path, sizeof(pp_path));
+
+	fp_pp = fopen(pp_path, "w");
+	if (!fp_pp) {
+		error("Failed to open pairing policy file for %s: %s", addr, strerror(errno))
+		return -1;
+	}
+
+	fprintf(fp_pp, "required_policy: %s", policy2str(policy));
+	// #TODO: check return of fprintf to ensure correct output was written
+
+	fclose(fp_pp);
+
+	return 0;
+}
+
+static DBusMessage *dev_set_pairing_policy(DBusConnection *conn, DBusMessage *msg,
+							void *user_data)
+{
+	struct btd_device *device = user_data;
+	const char *pp;
+	pairing_policy_t policy;
+
+	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &pp, DBUS_TYPE_INVALID))
+		return btd_error_invalid_args(msg);
+
+	if (strcmp(pp, "POLICY_ASSOC_ANY") == 0)
+		policy = POLICY_ASSOC_ANY;
+	else if (strcmp(pp, "POLICY_ASSOC_NO_JUST_WORKS") == 0)
+		policy = POLICY_ASSOC_NO_JUST_WORKS;
+	else if (strcmp(pp, "POLICY_ASSOC_PASSKEY_ENTRY") == 0)
+		policy = POLICY_ASSOC_PASSKEY_ENTRY;
+	else if (strcmp(pp, "POLICY_ASSOC_OOB") == 0)
+		policy = POLICY_ASSOC_OOB;
+	else {
+		return btd_error_invalid_args(msg);
+	}
+
+	if (write_pairing_policy(device, policy) < 0)
+		return btd_error_failed(msg, "Failed to write policy file");
+
+	return dbus_message_new_method_return(msg);
+}
+
+static gboolean enforce_pairing_policy(struct btd_device *device, auth_type_t negotiated_auth)
+{
+	char addr[18];
+	char pp_path[PATH_MAX];
+	char *pp;
+	FILE *fp_pp;
+	int n;
+	pairing_policy_t policy;
+
+	ba2str(&device->bdaddr, addr);
+	DBG("Checking pairing policy for %s", addr);
+
+	policy = POLICY_ASSOC_ANY;
+	
+	get_policy_path(device, pp_path, sizeof(pp_path));
+
+	fp_pp = fopen(pp_path, "r");
+	if (!fp_pp) {
+		DBG("Failed to open pairing policy file for %s: %s", addr, strerror(errno))
+	} else {
+		n = fscanf(fp_pp, "required_policy: %ms", &pp);
+		if (n != 1) {
+			error("Malformed policy file: %s", strerror(errno))
+			fclose(fp);
+			return FALSE;
+		}
+
+		if (strcmp(pp, "POLICY_ASSOC_ANY") == 0)
+			policy = POLICY_ASSOC_ANY;
+		else if (strcmp(pp, "POLICY_ASSOC_NO_JUST_WORKS") == 0)
+			policy = POLICY_ASSOC_NO_JUST_WORKS;
+		else if (strcmp(pp, "POLICY_ASSOC_PASSKEY_ENTRY") == 0)
+			policy = POLICY_ASSOC_PASSKEY_ENTRY;
+		else if (strcmp(pp, "POLICY_ASSOC_OOB") == 0)
+			policy = POLICY_ASSOC_OOB;
+		else {
+			error("Unknown policy: %s", pp)
+			free(pp);
+			fclose(fp);
+			return FALSE;
+		}
+		
+		free(pp);
+		fclose(fp);
+	}
+
+	switch (policy) {
+		case POLICY_ASSOC_ANY:
+			return TRUE;			/* Any method is allowed, always true */
+		case POLICY_ASSOC_NO_JUST_WORKS:
+			if (!negotiated_auth) 	/* Any method except Just Works (NULL auth_type) */
+				return TRUE;
+			goto nomatch;
+		case POLICY_ASSOC_PASSKEY_ENTRY:
+			if (negotiated_auth == AUTH_TYPE_NOTIFY_PASSKEY || negotiated_auth == AUTH_TYPE_PASSKEY)
+				return TRUE;
+			goto nomatch;
+		case POLICY_ASSOC_OOB:
+			// TODO: find an entrypoint to enforce OOB
+			error("OOB not supported yet");
+			return FALSE;
+		default:
+			error("Unknown policy: %s", policy2str(policy))
+			return FALSE;
+    }
+
+nomatch:
+	error("Negotiated authentication method does not match the specified policy");
+	return FALSE;
+}
+
 static struct authentication_req *new_auth(struct btd_device *device,
 						uint8_t addr_type,
 						auth_type_t type,
@@ -7602,6 +7798,11 @@ static struct authentication_req *new_auth(struct btd_device *device,
 
 	if (!agent) {
 		error("No agent available for request type %d", type);
+		return NULL;
+	}
+
+	if(!enforce_pairing_policy(device, type)) {
+		error("Negotiated authentication method does not match the specified policy")
 		return NULL;
 	}
 
@@ -7666,12 +7867,12 @@ int device_confirm_passkey(struct btd_device *device, uint8_t type,
 			btd_adapter_confirm_reply(device->adapter,
 						  &device->bdaddr,
 						  type, FALSE);
-			return 0;
+			return enforce_pairing_policy(device, NULL) ? 0 : -EPERM;
 		} else if (btd_opts.jw_repairing == JW_REPAIRING_ALWAYS) {
 			btd_adapter_confirm_reply(device->adapter,
 						  &device->bdaddr,
 						  type, TRUE);
-			return 0;
+			return enforce_pairing_policy(device, NULL) ? 0 : -EPERM;
 		}
 	}
 
