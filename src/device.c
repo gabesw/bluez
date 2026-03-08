@@ -7614,36 +7614,6 @@ static void display_pincode_cb(struct agent *agent, DBusError *err, void *data)
 	device->authr->pincode = NULL;
 }
 
-static int get_policy_dir(struct btd_device *device,
-							char *dir_out, size_t dir_out_len)
-{
-	char addr[18];
-	const char *type_str;
-
-	ba2str(&device->bdaddr, addr);
-
-	switch (device->bdaddr_type) {
-		case BDADDR_BREDR:
-			type_str = "bredr";
-			break;
-		case BDADDR_LE_PUBLIC:
-			type_str = "le_public";
-			break;
-		case BDADDR_LE_RANDOM:
-			type_str = "le_random";
-			break;
-		default:
-			type_str = "unknown";
-			break;
-	}
-
-	snprintf(dir_out, dir_out_len,
-				PAIRING_POLICY_BASEDIR "/%s_%s",
-				addr, type_str);
-
-	return 0;
-}
-
 static DBusMessage *dev_set_pairing_policy(DBusConnection *conn, DBusMessage *msg,
 							void *user_data)
 {
