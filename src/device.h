@@ -11,10 +11,6 @@
 
 #define DEVICE_INTERFACE	"org.bluez.Device1"
 
-#define PAIRING_POLICY_BASEDIR "/var/lib/bluetooth/pairing_policies"
-
-#define PAIRING_POLICY_FILENAME "/policy"
-
 struct btd_device;
 
 struct btd_device *device_create(struct btd_adapter *adapter,
