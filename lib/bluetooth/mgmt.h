@@ -1206,6 +1206,7 @@ static const char *mgmt_op[] = {
 	"Mesh Send",
 	"Mesh Send Cancel",
 	"HCI Cmd Sync",
+	"Set Device Pairing Policy",
 };
 
 static const char *mgmt_ev[] = {
