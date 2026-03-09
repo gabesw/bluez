@@ -120,14 +120,6 @@ struct authentication_req {
 	gboolean secure;
 };
 
-typedef enum {
-    POLICY_ASSOC_ANY = 0,
-    POLICY_ASSOC_NO_JUST_WORKS,    /* reject JUST_WORKS and JUST_CFM */
-    POLICY_ASSOC_NUMERIC_COMPARE,  /* require REQ_PASSKEY, CFM_PASSKEY, or DSP_PASSKEY */
-    POLICY_ASSOC_PASSKEY_ENTRY,
-    POLICY_ASSOC_OOB,
-} pairing_policy_t;
-
 enum {
 	BROWSE_SDP,
 	BROWSE_GATT
@@ -336,6 +328,8 @@ static const char *policy2str(pairing_policy_t policy)
 			return "POLICY_ASSOC_ANY";
 		case POLICY_ASSOC_NO_JUST_WORKS:
 			return "POLICY_ASSOC_NO_JUST_WORKS";
+		case POLICY_ASSOC_NUMERIC_COMPARE:
+			return "POLICY_ASSOC_NUMERIC_COMPARE";
 		case POLICY_ASSOC_PASSKEY_ENTRY:
 			return "POLICY_ASSOC_PASSKEY_ENTRY";
 		case POLICY_ASSOC_OOB:
@@ -343,6 +337,24 @@ static const char *policy2str(pairing_policy_t policy)
 		default:
 			return "POLICY_ASSOC_ANY";
     }
+}
+
+int str2policy(const char *str, pairing_policy_t *out) {
+	if (strcmp(str, "POLICY_ASSOC_ANY") == 0)
+		*out = POLICY_ASSOC_ANY;
+	else if (strcmp(str, "POLICY_ASSOC_NO_JUST_WORKS") == 0)
+		*out = POLICY_ASSOC_NO_JUST_WORKS;
+	else if (strcmp(str, "POLICY_ASSOC_NUMERIC_COMPARE") == 0)
+		*out = POLICY_ASSOC_NUMERIC_COMPARE;
+	else if (strcmp(str, "POLICY_ASSOC_PASSKEY_ENTRY") == 0)
+		*out = POLICY_ASSOC_PASSKEY_ENTRY;
+	else if (strcmp(str, "POLICY_ASSOC_OOB") == 0)
+		*out = POLICY_ASSOC_OOB;
+	else {
+		return -EPERM;
+	}
+
+	return 0;
 }
 
 static int device_browse_gatt(struct btd_device *device, DBusMessage *msg);
@@ -7624,67 +7636,18 @@ static DBusMessage *dev_set_pairing_policy(DBusConnection *conn, DBusMessage *ms
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &pp, DBUS_TYPE_INVALID))
 		return btd_error_invalid_args(msg);
 
-	if (strcmp(pp, "POLICY_ASSOC_ANY") == 0)
-		policy = POLICY_ASSOC_ANY;
-	else if (strcmp(pp, "POLICY_ASSOC_NO_JUST_WORKS") == 0)
-		policy = POLICY_ASSOC_NO_JUST_WORKS;
-	else if (strcmp(pp, "POLICY_ASSOC_PASSKEY_ENTRY") == 0)
-		policy = POLICY_ASSOC_PASSKEY_ENTRY;
-	else if (strcmp(pp, "POLICY_ASSOC_OOB") == 0)
-		policy = POLICY_ASSOC_OOB;
-	else {
+	if (str2policy(pp, &policy) < 0)
 		return btd_error_invalid_args(msg);
-	}
 
-	device->pairing_policy = policy;
-
+	device_set_pairing_policy(device, policy);
 	store_device_info(device);
 
 	return dbus_message_new_method_return(msg);
 }
 
-// TODO: remove method and move enforcement to kernel
-static gboolean enforce_pairing_policy(struct btd_device *device, auth_type_t negotiated_auth)
-{
-	char addr[18];
-	char pp_path[PATH_MAX];
-	char *pp;
-	FILE *fp_pp;
-	int n;
-	pairing_policy_t policy;
-
-	ba2str(&device->bdaddr, addr);
-	DBG("Checking pairing policy for %s", addr);
-
-	policy = device->pairing_policy;
-
-	if(!policy) {
-		warn("Device %s has no pairing policy or accepts any association method", addr)
-	}
-
-	switch (policy) {
-		case POLICY_ASSOC_ANY:
-			return TRUE;			/* Any method is allowed, always true */
-		case POLICY_ASSOC_NO_JUST_WORKS:
-			if (!negotiated_auth) 	/* Any method except Just Works (NULL auth_type) */
-				return TRUE;
-			goto nomatch;
-		case POLICY_ASSOC_PASSKEY_ENTRY:
-			if (negotiated_auth == AUTH_TYPE_NOTIFY_PASSKEY || negotiated_auth == AUTH_TYPE_PASSKEY)
-				return TRUE;
-			goto nomatch;
-		case POLICY_ASSOC_OOB:
-			// TODO: OOB can only be enforced at the kernel level
-			error("OOB not supported here");
-			return FALSE;
-		default:
-			error("Unknown policy: %s", policy2str(policy))
-			return FALSE;
-    }
-
-nomatch:
-	error("Negotiated authentication method does not match the specified policy");
-	return FALSE;
+void device_set_pairing_policy(struct btd_device *device, pairing_policy_t policy) {
+	device->pairing_policy = policy;
+	btd_adapter_set_device_pairing_policy(device->adapter, device);
 }
 
 static struct authentication_req *new_auth(struct btd_device *device,
@@ -7711,11 +7674,6 @@ static struct authentication_req *new_auth(struct btd_device *device,
 
 	if (!agent) {
 		error("No agent available for request type %d", type);
-		return NULL;
-	}
-
-	if(!enforce_pairing_policy(device, type)) { // TODO: Remove and move enforcement to kernel
-		error("Negotiated authentication method does not match the specified policy")
 		return NULL;
 	}
 
@@ -7780,12 +7738,12 @@ int device_confirm_passkey(struct btd_device *device, uint8_t type,
 			btd_adapter_confirm_reply(device->adapter,
 						  &device->bdaddr,
 						  type, FALSE);
-			return enforce_pairing_policy(device, NULL) ? 0 : -EPERM; // TODO: remove enforcement and move to kernel
+			return 0;
 		} else if (btd_opts.jw_repairing == JW_REPAIRING_ALWAYS) {
 			btd_adapter_confirm_reply(device->adapter,
 						  &device->bdaddr,
 						  type, TRUE);
-			return enforce_pairing_policy(device, NULL) ? 0 : -EPERM; // TODO: remove enforcement and move to kernel
+			return 0;
 		}
 	}
 

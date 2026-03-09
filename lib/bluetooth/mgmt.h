@@ -373,6 +373,12 @@ struct mgmt_cp_load_irks {
 	struct mgmt_irk_info irks[0];
 } __packed;
 
+#define MGMT_OP_SET_DEVICE_PAIRING_POLICY   0x005C
+struct mgmt_cp_set_device_pairing_policy {
+    struct mgmt_addr_info addr;
+    uint8_t policy;
+} __packed;
+
 #define MGMT_OP_GET_CONN_INFO		0x0031
 struct mgmt_cp_get_conn_info {
 	struct mgmt_addr_info addr;

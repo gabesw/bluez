@@ -320,3 +320,6 @@ unsigned int btd_adapter_send_cmd_event_sync(struct btd_adapter *adapter,
 					void *user_data,
 					btd_adapter_destroy_func_t destroy,
 					uint8_t timeout);
+
+void btd_adapter_set_device_pairing_policy(struct btd_adapter *adapter,
+                                            struct btd_device *device);
