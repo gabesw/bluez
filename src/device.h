@@ -242,3 +242,15 @@ void btd_device_foreach_service(struct btd_device *dev,
 				void *user_data);
 void device_remove_pending_services(struct btd_device *dev,
 					uint8_t bdaddr_type);
+
+typedef enum {
+    POLICY_ASSOC_ANY = 0,
+    POLICY_ASSOC_NO_JUST_WORKS,    /* reject JUST_WORKS and JUST_CFM */
+    POLICY_ASSOC_NUMERIC_COMPARE,  /* require REQ_PASSKEY, CFM_PASSKEY, or DSP_PASSKEY */
+    POLICY_ASSOC_PASSKEY_ENTRY,
+    POLICY_ASSOC_OOB,
+} pairing_policy_t;
+
+int str2policy(const char *str, pairing_policy_t *out);
+
+void device_set_pairing_policy(struct btd_device *device, pairing_policy_t policy);

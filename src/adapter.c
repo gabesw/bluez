@@ -196,6 +196,12 @@ struct irk_info {
 	bool is_blocked;
 };
 
+struct pairing_policy_info {
+	bdaddr_t bdaddr;
+	uint8_t bdaddr_type;
+	pairing_policy_t policy;
+};
+
 struct conn_param {
 	bdaddr_t bdaddr;
 	uint8_t  bdaddr_type;
@@ -4202,6 +4208,31 @@ failed:
 	return irk;
 }
 
+static struct pairing_policy_info *get_pairing_policy_info(GKeyFile *key_file,
+												const char *peer,
+												uint8_t bdaddr_type)
+{
+	struct pairing_policy_info *pp_inf = NULL;
+	pairing_policy_t policy;
+	char *pol_str;
+
+	pol_str = g_key_file_get_string(key_file, "General", "PairingPolicy",
+					NULL);
+	if (!pol_str || str2policy(pol_str, &policy) < 0)
+		goto failed;
+
+	pp_inf = g_new0(struct pairing_policy_info, 1);
+
+	str2ba(peer, &pp_inf->bdaddr);
+	pp_inf->bdaddr_type = bdaddr_type;
+	pp_inf->policy = policy;
+
+failed:
+	g_free(pol_str);
+
+	return pp_inf;
+}
+
 static struct conn_param *get_conn_param(GKeyFile *key_file, const char *peer,
 							uint8_t bdaddr_type)
 {
@@ -4701,6 +4732,48 @@ void btd_adapter_load_conn_param(struct btd_adapter *adapter,
 	g_slist_free(params);
 }
 
+static void set_device_pairing_policy_complete(uint8_t status, uint16_t length,
+					const void *param, void *user_data)
+{
+	struct btd_adapter *adapter = user_data;
+
+	if (status == MGMT_STATUS_UNKNOWN_COMMAND) {
+		btd_info(adapter->dev_id,
+			"Set Device Pairing Policy failed: Kernel doesn't support Pairing Policies");
+		return;
+	}
+
+	if (status != MGMT_STATUS_SUCCESS) {
+		btd_error(adapter->dev_id,
+			"hci%u Set Device Pairing Policy failed: %s (0x%02x)",
+				adapter->dev_id, mgmt_errstr(status), status);
+		return;
+	}
+
+	DBG("Device Pairing Policy set for hci%u", adapter->dev_id);
+}
+
+static void set_device_pairing_policies(struct btd_adapter *adapter, GSList *policies)
+{
+    GSList *l;
+
+    for (l = policies; l != NULL; l = g_slist_next(l)) {
+        struct pairing_policy_info *info = l->data;
+        struct mgmt_cp_set_device_pairing_policy cp;
+
+        memset(&cp, 0, sizeof(cp));
+        bacpy(&cp.addr.bdaddr, &info->bdaddr);
+        cp.addr.type = info->bdaddr_type;
+        cp.policy = (uint8_t) info->policy;
+
+        if (!mgmt_send(adapter->mgmt, MGMT_OP_SET_DEVICE_PAIRING_POLICY,
+            	adapter->dev_id, sizeof(cp), &cp,
+                set_device_pairing_policy_complete, adapter, NULL))
+            btd_error(adapter->dev_id,
+                "Failed to set Pairing Policy for hci%u", adapter->dev_id);
+    }
+}
+
 static uint8_t get_addr_type(GKeyFile *keyfile)
 {
 	uint8_t addr_type;
@@ -4986,6 +5059,7 @@ static void load_devices(struct btd_adapter *adapter)
 	GSList *irks = NULL;
 	GSList *params = NULL;
 	GSList *added_devices = NULL;
+	GSList *pairing_policies = NULL;
 	GError *gerr = NULL;
 	DIR *dir;
 	struct dirent *entry;
@@ -5010,6 +5084,7 @@ static void load_devices(struct btd_adapter *adapter)
 		struct smp_ltk_info *peripheral_ltk_info;
 		GSList *list;
 		struct irk_info *irk_info;
+		struct pairing_policy_info *pairing_policy_info;
 		struct conn_param *param;
 		uint8_t bdaddr_type;
 
@@ -5041,6 +5116,9 @@ static void load_devices(struct btd_adapter *adapter)
 
 		irk_info = get_irk_info(key_file, entry->d_name, bdaddr_type);
 
+		pairing_policy_info = get_pairing_policy_info(key_file,
+						entry->d_name, bdaddr_type);
+
 		// If any key for the device is blocked, we discard all.
 		if ((key_info && key_info->is_blocked) ||
 				(ltk_info && ltk_info->is_blocked) ||
@@ -5066,6 +5144,11 @@ static void load_devices(struct btd_adapter *adapter)
 			if (irk_info) {
 				g_free(irk_info);
 				irk_info = NULL;
+			}
+
+			if (pairing_policy_info) {
+				g_free(pairing_policy_info);
+				pairing_policy_info = NULL;
 			}
 
 			goto free;
@@ -5102,6 +5185,11 @@ static void load_devices(struct btd_adapter *adapter)
 		if (irk_info)
 			device_set_privacy(device, true, irk_info->val);
 
+		if (pairing_policy_info) {
+			pairing_policies = g_slist_append(pairing_policies, pairing_policy_info);
+			device_set_pairing_policy(device, pairing_policy_info->policy);
+		}
+
 		btd_device_set_temporary(device, false);
 		adapter_add_device(adapter, device);
 
@@ -5130,6 +5218,8 @@ free:
 	g_slist_free_full(irks, g_free);
 	load_conn_params(adapter, params);
 	g_slist_free_full(params, g_free);
+	set_device_pairing_policies(adapter, pairing_policies);
+	g_slist_free_full(pairing_policies, g_free);
 
 	g_slist_free_full(added_devices, probe_devices);
 }
@@ -8147,6 +8237,23 @@ int btd_adapter_confirm_reply(struct btd_adapter *adapter,
 		return 0;
 
 	return -EIO;
+}
+
+void btd_adapter_set_device_pairing_policy(struct btd_adapter *adapter,
+											struct btd_device *device)
+{
+	struct mgmt_cp_set_device_pairing_policy cp;
+	
+	memset(&cp, 0, sizeof(cp));
+    bacpy(&cp.addr.bdaddr, &device->bdaddr);
+    cp.addr.type = device->bdaddr_type;
+    cp.policy = (uint8_t) device->pairing_policy;
+
+    if (!mgmt_send(adapter->mgmt, MGMT_OP_SET_DEVICE_PAIRING_POLICY,
+            adapter->dev_id, sizeof(cp), &cp,
+            set_device_pairing_policy_complete, adapter, NULL))
+        btd_error(adapter->dev_id,
+            "Failed to set pairing policy for hci%u", adapter->dev_id);
 }
 
 static void user_confirm_request_callback(uint16_t index, uint16_t length,
