@@ -3624,6 +3624,30 @@ static DBusMessage *get_service_records(DBusConnection *conn, DBusMessage *msg,
 	return reply;
 }
 
+static DBusMessage *dev_set_pairing_policy(DBusConnection *conn, DBusMessage *msg,
+							void *user_data)
+{
+	struct btd_device *device = user_data;
+	const char *pp;
+	pairing_policy_t policy;
+
+	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &pp, DBUS_TYPE_INVALID))
+		return btd_error_invalid_args(msg);
+
+	if (str2policy(pp, &policy) < 0)
+		return btd_error_invalid_args(msg);
+
+	device_set_pairing_policy(device, policy);
+	store_device_info(device);
+
+	return dbus_message_new_method_return(msg);
+}
+
+void device_set_pairing_policy(struct btd_device *device, pairing_policy_t policy) {
+	device->pairing_policy = policy;
+	btd_adapter_set_device_pairing_policy(device->adapter, device);
+}
+
 static const GDBusMethodTable device_methods[] = {
 	{ GDBUS_ASYNC_METHOD("Disconnect", NULL, NULL, dev_disconnect) },
 	{ GDBUS_ASYNC_METHOD("Connect", NULL, NULL, dev_connect) },
@@ -7624,30 +7648,6 @@ static void display_pincode_cb(struct agent *agent, DBusError *err, void *data)
 
 	g_free(device->authr->pincode);
 	device->authr->pincode = NULL;
-}
-
-static DBusMessage *dev_set_pairing_policy(DBusConnection *conn, DBusMessage *msg,
-							void *user_data)
-{
-	struct btd_device *device = user_data;
-	const char *pp;
-	pairing_policy_t policy;
-
-	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &pp, DBUS_TYPE_INVALID))
-		return btd_error_invalid_args(msg);
-
-	if (str2policy(pp, &policy) < 0)
-		return btd_error_invalid_args(msg);
-
-	device_set_pairing_policy(device, policy);
-	store_device_info(device);
-
-	return dbus_message_new_method_return(msg);
-}
-
-void device_set_pairing_policy(struct btd_device *device, pairing_policy_t policy) {
-	device->pairing_policy = policy;
-	btd_adapter_set_device_pairing_policy(device->adapter, device);
 }
 
 static struct authentication_req *new_auth(struct btd_device *device,
