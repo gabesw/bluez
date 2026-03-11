@@ -4776,14 +4776,14 @@ static void set_device_pairing_policies(struct btd_adapter *adapter, GSList *pol
 
 void btd_adapter_set_device_pairing_policy(struct btd_adapter *adapter,
 											bdaddr_t bdaddr, uint8_t bdaddr_type,
-											pairing_policy_t pairing_policy)
+											uint8_t pairing_policy)
 {
 	struct mgmt_cp_set_device_pairing_policy cp;
 	
 	memset(&cp, 0, sizeof(cp));
     bacpy(&cp.addr.bdaddr, &bdaddr);
     cp.addr.type = bdaddr_type;
-    cp.policy = (uint8_t) pairing_policy;
+    cp.policy = pairing_policy;
 
     if (!mgmt_send(adapter->mgmt, MGMT_OP_SET_DEVICE_PAIRING_POLICY,
             adapter->dev_id, sizeof(cp), &cp,

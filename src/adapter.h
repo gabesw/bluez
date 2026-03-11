@@ -323,4 +323,4 @@ unsigned int btd_adapter_send_cmd_event_sync(struct btd_adapter *adapter,
 
 void btd_adapter_set_device_pairing_policy(struct btd_adapter *adapter,
 											bdaddr_t bdaddr, uint8_t bdaddr_type,
-											pairing_policy_t pairing_policy);
+											uint8_t pairing_policy);

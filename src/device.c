@@ -3645,7 +3645,7 @@ static DBusMessage *dev_set_pairing_policy(DBusConnection *conn, DBusMessage *ms
 
 void device_set_pairing_policy(struct btd_device *device, pairing_policy_t policy) {
 	device->pairing_policy = policy;
-	btd_adapter_set_device_pairing_policy(device->adapter, device->bdaddr, device->bdaddr_type, device->pairing_policy);
+	btd_adapter_set_device_pairing_policy(device->adapter, device->bdaddr, device->bdaddr_type, (uint8_t) device->pairing_policy);
 }
 
 static const GDBusMethodTable device_methods[] = {
