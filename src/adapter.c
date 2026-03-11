@@ -8239,23 +8239,6 @@ int btd_adapter_confirm_reply(struct btd_adapter *adapter,
 	return -EIO;
 }
 
-void btd_adapter_set_device_pairing_policy(struct btd_adapter *adapter,
-											struct btd_device *device)
-{
-	struct mgmt_cp_set_device_pairing_policy cp;
-	
-	memset(&cp, 0, sizeof(cp));
-    bacpy(&cp.addr.bdaddr, &device->bdaddr);
-    cp.addr.type = device->bdaddr_type;
-    cp.policy = (uint8_t) device->pairing_policy;
-
-    if (!mgmt_send(adapter->mgmt, MGMT_OP_SET_DEVICE_PAIRING_POLICY,
-            adapter->dev_id, sizeof(cp), &cp,
-            set_device_pairing_policy_complete, adapter, NULL))
-        btd_error(adapter->dev_id,
-            "Failed to set pairing policy for hci%u", adapter->dev_id);
-}
-
 static void user_confirm_request_callback(uint16_t index, uint16_t length,
 					const void *param, void *user_data)
 {
